@@ -17,6 +17,8 @@ alembic = "^1.8.1"
 python-jose = "^3.3.0"
 python-multipart = "^0.0.5"
 passlib = {extras = ["bcrypt"], version = "^1.7.4"}
+fastapi-users = {extras = ["sqlalchemy"], version = "^10.2.1"}
+asyncpg = "^0.27.0"
 
 
 [build-system]
