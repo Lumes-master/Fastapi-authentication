@@ -1,19 +1,19 @@
 from datetime import datetime, timedelta
-from fastapi import Depends, HTTPException, Response
+from fastapi import BackgroundTasks, Depends, HTTPException, Response
 from fastapi.security import OAuth2PasswordRequestForm, OAuth2PasswordBearer
 from jose import jwt, JWTError
 from passlib.hash import bcrypt
 from starlette import status
 
 from db.database import get_db, Session
-from db.user_tables import User, Profile as DB_Profile
+from db.models import User, Profile as DB_Profile
 from schemas.users import UserPost, UserORM, UserForToken
 from settings import settings
 
 from schemas.users import Token
 
 
-oauth2 = OAuth2PasswordBearer(tokenUrl="/sign-in/")
+oauth2 = OAuth2PasswordBearer(tokenUrl="/auth/sign-in/")
 
 def get_current_user(token: str = Depends(oauth2))->UserORM:
     return UserService.validate_token(token)
@@ -80,11 +80,18 @@ class UserService:
         return self.create_token(user)
 
     ### CRUD
-    @staticmethod
-    def create_profile(nickname:str, user_id: int)->DB_Profile:
-        return DB_Profile(nickname=nickname, user_id=user_id)
 
-    def create_user(self, data: UserPost)->Token:
+    def create_profile(self, username:str, user_id: int):
+        profile = DB_Profile(username=username, user_id=user_id)
+        self.session.add(profile)
+        self.session.commit()
+        self.session.refresh(profile)
+
+
+
+    def create_user(self,
+                    data: UserPost,
+                    back: BackgroundTasks)->Token:
         user = User(
             email=data.email,
             hashed_password=self.hash_password(data.password),
@@ -92,17 +99,10 @@ class UserService:
             nickname = data.nickname
 
         )
-
         self.session.add(user)
         self.session.commit()
         self.session.refresh(user)
-        profile = self.create_profile(
-            nickname=user.nickname,
-            user_id=user.user_id
-        )
-        self.session.add(profile)
-        self.session.commit()
-        self.session.refresh(profile)
+        self.create_profile(username=user.username, user_id=user.user_id)
         return self.create_token(user)
 
 
