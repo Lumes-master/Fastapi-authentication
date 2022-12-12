@@ -7,6 +7,8 @@ class Settings(BaseSettings):
     database_url: str
     jwt_secret: str
     jwt_algorithm: str = "HS256"
+    email: str
+    email_access: str
 
     class Config:
         env_file = '.env'

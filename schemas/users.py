@@ -11,7 +11,7 @@ class Role(str, Enum):
 
 class UserBase(BaseModel):
     email: str
-    nickname: str
+    username: str
     role: Role
 
 
@@ -22,6 +22,7 @@ class UserORM(UserBase):
     user_id: int
     created_at: datetime
     updated_at: datetime
+
     class Config:
         orm_mode = True
 class UserForToken(UserBase):

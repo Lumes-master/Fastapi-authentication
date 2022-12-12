@@ -5,7 +5,7 @@ from alembic import context
 
 from settings import settings
 from db.database import Base
-from db import user_tables
+from db import models
 
 
 # this is the Alembic Config object, which provides

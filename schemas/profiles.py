@@ -5,7 +5,7 @@ from pydantic import BaseModel
 
 class ProfileBase(BaseModel):
 
-    nick_name: str
+    username: str
     user_id: int
     is_active:bool = True
 

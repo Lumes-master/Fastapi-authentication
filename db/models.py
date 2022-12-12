@@ -1,11 +1,16 @@
+from datetime import datetime
+
 import sqlalchemy as sq
-from enum import Enum
-from sqlalchemy.orm import relationship
-from sqlalchemy.ext.declarative import declarative_base
-
+from sqlalchemy.orm import relationship, declarative_mixin
+from sqlalchemy import  DateTime
 from db.database import Base
-from db.mixins import TimeStamp
 
+
+@declarative_mixin
+class TimeStamp:
+    """creating extra date fields in children classes automaticly"""
+    created_at = sq.Column(DateTime, default=datetime.utcnow, nullable = False)
+    updated_at = sq.Column(DateTime, default = datetime.utcnow, nullable = False)
 class User(TimeStamp, Base):
     __tablename__ = 'users'
 
@@ -15,6 +20,7 @@ class User(TimeStamp, Base):
     username = sq.Column(sq.String(50), nullable=False)
     role = sq.Column(sq.Text)
     profile = relationship('Profile', back_populates='owner', uselist=False)
+    code = relationship('Code', back_populates='user', uselist=False)
 
 
 class Profile(Base):
@@ -25,3 +31,12 @@ class Profile(Base):
     user_id = sq.Column(sq.Integer, sq.ForeignKey('users.user_id'), nullable=False)
     is_active = sq.Column(sq.Boolean, default=True)
     owner = relationship('User', back_populates='profile')
+
+class Code(Base):
+    __tablename__ = 'codes'
+
+    id = sq.Column(sq.Integer, primary_key=True, index=True)
+    reset_code = sq.Column(sq.String(50), nullable=True)
+    expires_at = sq.Column(sq.DateTime, nullable=True)
+    user_id = sq.Column(sq.Integer, sq.ForeignKey('users.user_id'))
+    user = relationship('User', back_populates='code')
