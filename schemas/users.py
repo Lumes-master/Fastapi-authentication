@@ -4,16 +4,9 @@ from typing import Optional
 from pydantic import BaseModel
 
 
-class Role(str, Enum):
-    TEACHER='teacher'
-    STUDENT='student'
-
-
 class UserBase(BaseModel):
     email: str
     username: str
-    role: Role
-
 
 class UserPost(UserBase):
     password: str
@@ -25,6 +18,7 @@ class UserORM(UserBase):
 
     class Config:
         orm_mode = True
+
 class UserForToken(UserBase):
     user_id: int
 

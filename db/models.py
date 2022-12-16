@@ -11,6 +11,8 @@ class TimeStamp:
     """creating extra date fields in children classes automaticly"""
     created_at = sq.Column(DateTime, default=datetime.utcnow, nullable = False)
     updated_at = sq.Column(DateTime, default = datetime.utcnow, nullable = False)
+
+
 class User(TimeStamp, Base):
     __tablename__ = 'users'
 
@@ -18,7 +20,7 @@ class User(TimeStamp, Base):
     email = sq.Column(sq.String(100), unique=True, index=True, nullable=False)
     hashed_password = sq.Column(sq.Text, unique=True)
     username = sq.Column(sq.String(50), nullable=False)
-    role = sq.Column(sq.Text)
+    activated = sq.Column(sq.Boolean, default=False)
     profile = relationship('Profile', back_populates='owner', uselist=False)
     code = relationship('Code', back_populates='user', uselist=False)
 
@@ -29,14 +31,15 @@ class Profile(Base):
     profile_id = sq.Column(sq.Integer, primary_key=True, index=True)
     username = sq.Column(sq.String(50), nullable=False)
     user_id = sq.Column(sq.Integer, sq.ForeignKey('users.user_id'), nullable=False)
-    is_active = sq.Column(sq.Boolean, default=True)
     owner = relationship('User', back_populates='profile')
+
 
 class Code(Base):
     __tablename__ = 'codes'
 
     id = sq.Column(sq.Integer, primary_key=True, index=True)
     reset_code = sq.Column(sq.String(50), nullable=True)
-    expires_at = sq.Column(sq.DateTime, nullable=True)
+    verify_code = sq.Column(sq.String(50), nullable=True)
+    expires_reset_code = sq.Column(sq.DateTime, nullable=True)
     user_id = sq.Column(sq.Integer, sq.ForeignKey('users.user_id'))
     user = relationship('User', back_populates='code')
