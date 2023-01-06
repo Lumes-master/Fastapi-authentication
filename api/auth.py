@@ -1,10 +1,10 @@
-import json
+
 from fastapi import APIRouter, Depends, BackgroundTasks
 from fastapi.security import OAuth2PasswordRequestForm
 
-from schemas.codes import Codes
+from schemas.users import CodeBase
 from schemas.messages import Message
-from schemas.users import Token, UserPost, UserORM
+from schemas.users import Token, UserPost, UserORM, UserForToken
 from services.auth_service import UserService
 from services.email_service import EmailService
 from services.reset_pass_service import ResetPassService
@@ -18,30 +18,33 @@ async def register_new_user(
         background_task: BackgroundTasks,
         user_service: UserService = Depends(),
         email_service: EmailService = Depends()
-        )->Token:
-    user = user_service.create_user(data)
+        )->UserORM:
+
+    user = await user_service.create_user(data)
+    verify_code = await user_service.create_verifying_code(user.user_id)
     background_task.add_task(
-        user_service.create_profile,
-        username=user.username,
-        user_id=user.user_id
+        email_service.send_hello_email, data.username, data.email, verify_code
     )
-    verify_code = user_service.create_verifying_code(user.user_id)
-    background_task.add_task(
-        email_service.send_hello_email(data.username, data.email, verify_code)
-    )
-    return user_service.create_token(user)
+    return user
 
 
-@auth_router.post('/confirm-registration')
-def confirm_registration(email: str, code: str,
-                         service: UserService=Depends())->Message:
-    return service.confirm_registration(email=email, code=code)
+@auth_router.get('/confirm-registration', response_model=Token)
+async def confirm_registration(
+        email: str,
+        code: str,
+        backgroundtask: BackgroundTasks,
+        user_service: UserService=Depends()
+)->Token:
+    user = await user_service.confirm_registration(email=email, code=code)
+    backgroundtask.add_task(user_service.create_profile,  user.username, user.user_id,)
+    token = user_service.create_token(user)
+    return token
 
 
-@auth_router.post('/sign-in')
+@auth_router.post('/sign-in/')
 async def authenticate_user(data: OAuth2PasswordRequestForm = Depends(),
                             service:UserService = Depends())->Token:
-    return service.authenticate_user(data.username, data.password)
+    return await service.authenticate_user(data.username, data.password)
 
 
 @auth_router.post('/forget-password', response_model=Message)
@@ -51,7 +54,7 @@ async def send_reset_code(
         service: ResetPassService = Depends(),
         email_service: EmailService = Depends()
 ):
-    new_reset_code = service.save_new_reset_code(email)
+    new_reset_code = await service.save_new_reset_code(email)
     background_task.add_task(
         email_service.send_reset_code,
         email,
@@ -68,13 +71,12 @@ async def change_pass_via_code(
         new_pas1: str,
         new_pas2: str,
         service: ResetPassService=Depends())->UserORM:
-    user = service.change_password_with_code(
+
+    user = await service.change_password_with_code(
         code, pas1=new_pas1, pas2=new_pas2
     )
     return user
 
-@auth_router.post('/create-code', response_model=Codes)
-def create_restore_code(data: Codes, session: ResetPassService = Depends())->Codes:
-    new_code = session.create_code(data)
-    return new_code
+
+
 

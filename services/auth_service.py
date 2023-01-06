@@ -1,18 +1,19 @@
 from datetime import datetime, timedelta
 from fastapi import Depends, HTTPException, Response
-from fastapi.security import OAuth2PasswordRequestForm, OAuth2PasswordBearer
+from fastapi.security import OAuth2PasswordBearer
 from jose import jwt, JWTError
 from passlib.hash import bcrypt
+from sqlalchemy.orm import selectinload
 from starlette import status
+from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.future import select
 
-from db.database import get_db, Session
-from db.models import User as DB_User, Profile as DB_Profile, Code
-from schemas.messages import Message
-from schemas.users import UserPost, UserORM, UserForToken
+from db.database import async_get_db
+from db.models import User as DB_User, Profile as DB_Profile, Code, Profile
+from schemas.users import UserPost, UserORM, UserForToken, Token
 from services.mixins_code import MixinCode
-from services.reset_pass_service import ResetPassService
 from settings import settings
-from schemas.users import Token
+
 
 
 oauth2 = OAuth2PasswordBearer(tokenUrl="/auth/sign-in/")
@@ -20,15 +21,13 @@ oauth2 = OAuth2PasswordBearer(tokenUrl="/auth/sign-in/")
 def get_current_user(token: str = Depends(oauth2))->UserForToken:
     return UserService.validate_token(token)
 
-class UserService(MixinCode):
 
-    @classmethod
-    def hash_password(cls, raw_password)->str:
-        return bcrypt.hash(raw_password)
+class UserService(MixinCode):
 
     @classmethod
     def verify_password(cls, raw_password, hash_password)->bool:
         return bcrypt.verify(raw_password, hash_password)
+
 
     @classmethod
     def create_token(cls, user: DB_User)->Token:
@@ -45,6 +44,7 @@ class UserService(MixinCode):
                 algorithm=settings.jwt_algorithm
             )
         return Token(access_token=token)
+
 
     @classmethod
     def validate_token(cls, token: str)->UserForToken:
@@ -70,62 +70,94 @@ class UserService(MixinCode):
             )
         return user
 
-    def __init__(self, db:Session = Depends(get_db)):
+    @staticmethod
+    def compare_verify_code(user: DB_User, code: str):
+        if user.code.verify_code != code:
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail='Wrong code'
+            )
+
+    @staticmethod
+    def check_user_exists(user: DB_User):
+        print('inside check', user)
+        if user is None:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="User with this email is not found"
+            )
+
+    @staticmethod
+    def check_user_activated(user: DB_User):
+        if user.activated is True:
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail="You have already activated account"
+            )
+
+
+    def __init__(self, db: AsyncSession = Depends(async_get_db)):
         self.session = db
 
-    def create_profile(self, username:str, user_id: int):
+    async def check_user_activation_expired(self, user:DB_User):
+        now = datetime.utcnow()
+        if now > user.created_at + timedelta(days=1):
+            if user.code is not None:
+                await self.session.delete(user.code)
+                await self.session.delete(user)
+                await self.session.commit()
+                raise HTTPException(
+                    status_code=status.HTTP_403_FORBIDDEN,
+                    detail="Time for confirmation has expired. Please,"
+                           "pass registration procedure anew."
+                )
+            else:
+                raise HTTPException(
+                    status_code=status.HTTP_404_NOT_FOUND,
+                    detail='No code to verify'
+                )
+
+    async def create_profile(self, username:str, user_id: int):
         """Automatically activated while confirm registration"""
         profile = DB_Profile(username=username, user_id=user_id)
         self.session.add(profile)
+        await self.session.commit()
+        print('profile was created', profile)
 
 
-
-    def create_user(self, data: UserPost)->DB_User:
-        pas_service = ResetPassService()
+    async def create_user(self, data: UserPost)->DB_User:
         user = DB_User(
             email=data.email,
-            hashed_password=pas_service.hash_password(data.password),
-            role = data.role,
+            hashed_password=self.hash_password(data.password),
             username = data.username
         )
         self.session.add(user)
-        self.session.commit()
+        await self.session.commit()
         return user
 
 
-    def confirm_registration(self, email, code)->Message:
-        user = self._get_user_by_email(email)
-        now = datetime.utcnow()
-        if now > user.created_at + timedelta(days=1):
-            self.session.delete(user)
-            self.session.commit()
-            message = Message(message="Time for confirmation has expired. Please,"
-                              "pass registration procedure anew.")
-
-            return message
-
-        if user.code != code:
-            raise HTTPException(
-                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
-                detail='Wrong credentials'
-            )
+    async def confirm_registration(self, email: str, code: str)->DB_User:
+        user = await self._get_user_by_email(email)
+        self.check_user_activated(user)
+        await self.check_user_activation_expired(user)
+        self.compare_verify_code(user, code)
         user.activated=True
-        self.create_profile(username=user.username, user_id=user.user_id)
-        self.session.commit()
-        message = Message(message="Your registration is completed")
-        return message
+        await self.session.commit()
+        return user
 
-    def create_verifying_code(self, user_id):
+
+    async def create_verifying_code(self, user_id):
         code = Code(
             user_id=user_id,
             verify_code=self.generate_code(),
                             )
         self.session.add(code)
-        self.session.commit()
-        return code
+        await self.session.commit()
+        return code.verify_code
 
-    def authenticate_user(self, username: str, password: str)->Token:
-        user = self._get_user_by_username(username=username)
+
+    async def authenticate_user(self, username: str, password: str)->Token:
+        user = await self._get_user_by_username(username=username)
         if not self.verify_password(password, user.hashed_password):
             raise HTTPException(
                 status_code = status.HTTP_404_NOT_FOUND,
@@ -133,79 +165,59 @@ class UserService(MixinCode):
             )
         return self.create_token(user)
 
-    ### CRUD
-
-    def get_users(self)->list[UserORM]:
-        users = self.session.query(DB_User).all()
-        return users
 
 
-    def _get_user_by_id(self, user_id:int)->DB_User:
-        user = self.session.query(DB_User).filter_by(user_id=user_id).first()
-        if not user:
-            raise HTTPException(
-                status_code=401,
-                detail="User doesn't exists"
-            )
+    async def _get_user_by_id(self, user_id:int)->DB_User:
+        query = select(DB_User).where(DB_User.user_id==user_id)
+        user = await self.session.execute(query)
+        self.check_user_exists(user)
+        return user.scalar_one_or_none()
+
+
+    async def get_user_by_id(self, user_id: int):
+        return await self._get_user_by_id(user_id==user_id)
+
+
+    async def _get_user_by_username(self, username:str)->DB_User:
+        query = select(DB_User).where(DB_User.username==username)
+        user = await self.session.execute(query)
+        self.check_user_exists(user)
+        return user.scalar_one_or_none()
+
+
+    async def _get_user_by_email(self, email: str):
+        query = select(DB_User).where(DB_User.email == email).\
+            options(selectinload(DB_User.code), selectinload(DB_User.profile))
+        result = await self.session.execute(query)
+        user = result.scalar_one_or_none()
+        self.check_user_exists(user)
+        print('inside _get_user', user)
         return user
 
-    def get_user_by_id(self, user_id: int):
-        return self._get_user_by_id(user_id=user_id)
+
+    async def get_user_by_email(self, email: str):
+        return await self._get_user_by_email(email=email)
 
 
-    def _get_user_by_username(self, username:str):
-        user = self.session.query(DB_User).filter_by(username=username).first()
-        if not user:
-            raise HTTPException(
-                status_code=401,
-                detail="User doesn't exists")
-        return user
-
-    def _get_user_by_email(self, email: str):
-        user = self.session.query(DB_User).filter_by(email=email).first()
-        if not user:
-            if not user:
-                raise HTTPException(
-                    status_code=401,
-                    detail="User with such email doesn't exists"
-                )
-        return user
-
-    def delete_user_by_email(self, email: str = None):
+    async def delete_user_by_email(self, email: str = None):
         user = self._get_user_by_email(email)
-        self.session.delete(user)
-        self.session.commit()
+        await self.session.delete(user)
+        await self.session.commit()
         return Response(status_code=status.HTTP_204_NO_CONTENT)
 
 
-    def update_user(self, email: str, data: UserPost)->DB_User:
-        user = self._get_user_by_email(email)
-        for i in data.dict():
-            user.i = data.get(i)
-        self.session.save(user)
-        self.session.commit()
-        self.session.refresh(user)
+    async def update_user(self, email: str, data: UserPost)->DB_User:
+        user = await self._get_user_by_email(email)
+        for field, value in data:
+            setattr(user, field, value)
+        await self.session.commit()
         return user
 
-    def get_all_profiles(self)->list[DB_Profile]:
-        profile_list = self.session.query(DB_Profile).all()
-        return profile_list
 
-    def test_user_profile_create(self, user_id: int)->DB_User:
-        user = self._get_user_by_id(user_id)
-        user.username = 'test'
-        self.create_profile(username=user.username, user_id=user.user_id)
-        self.session.commit()
-        return user
-
-    def test_user_profile_delete(self, user_id: int)->Message:
-        user = self._get_user_by_id(user_id)
-        profile =  user.profile
-        self.session.delete(profile)
-        self.session.delete(user)
-        self.session.commit()
-        return Message('profiles were deleted')
-
+    async def get_users(self)->list[UserORM]:
+        query =  select(DB_User).all()
+        result =  await self.session.execute(query)
+        return result.scalars()
 
 
 

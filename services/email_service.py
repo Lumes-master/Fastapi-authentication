@@ -83,8 +83,4 @@ class EmailService:
             with smtplib.SMTP_SSL('smtp.ukr.net', 465, context=context) as smtp:
                 smtp.login(self.email_sender, self.email_access)
                 smtp.sendmail(self.email_sender, email_receiver, em.as_string())
-
-# if __name__ == '__main__':
-#     email1=EmailService('lumes2017@ukr.net', 'NWoahHXU1BUkDhGu')
-#
-#     email1.send_reset_code('lumes119@gmail.com', 'code from codealone')
+            print('email was sent')
